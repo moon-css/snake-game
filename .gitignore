@@ -1,0 +1,9 @@
+# .specstory 目录下所有内容
+.specstory/
+
+# 以 . 开头的文件和目录
+.*
+
+# 保留 Git 和本忽略文件
+!.git/
+!.gitignore
