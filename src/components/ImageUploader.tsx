@@ -16,7 +16,6 @@ export function ImageUploader({ label, onUpload, onClear, hasImage, previewSrc }
     const file = e.target.files?.[0];
     if (file && file.type.startsWith('image/')) {
       onUpload(file);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
