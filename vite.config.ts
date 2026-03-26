@@ -2,7 +2,10 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
 import path from 'path';
 
-export default defineConfig({
+// 开发时 base 必须为 '/'，否则在 localhost:3000/ 打开时资源会请求 /snake-game/... 导致 404
+// 构建时使用 /snake-game/ 与 package.json homepage（GitHub Pages 项目站）一致
+export default defineConfig(({ command }) => ({
+    base: command === 'serve' ? '/' : '/snake-game/',
     plugins: [react()],
     resolve: {
       extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
@@ -56,4 +59,4 @@ export default defineConfig({
       port: 3000,
       open: true,
     },
-  });
+  }));

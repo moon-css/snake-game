@@ -44,6 +44,86 @@ const GAME_SPEED = 150;
 /** 素材缓存版本，改用 assets/pass 默认背景后设为 2，旧缓存会清空以使用新默认 */
 const ASSETS_VERSION = 2;
 
+/** 图片/视频是否可安全用于 Canvas drawImage（broken 图会抛 InvalidStateError） */
+function isDrawableCanvasImageSource(
+  el: HTMLImageElement | HTMLVideoElement | undefined,
+): el is HTMLImageElement | HTMLVideoElement {
+  if (!el) return false;
+  if (el instanceof HTMLImageElement) {
+    return el.complete && el.naturalWidth > 0 && el.naturalHeight > 0;
+  }
+  if (el instanceof HTMLVideoElement) {
+    return el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  }
+  return false;
+}
+
+function safeDrawImageDest(
+  ctx: CanvasRenderingContext2D,
+  el: HTMLImageElement | HTMLVideoElement,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+): boolean {
+  if (!isDrawableCanvasImageSource(el)) return false;
+  try {
+    ctx.drawImage(el, dx, dy, dw, dh);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 为 img 设置 src；仅对外域 http(s) 资源设置 crossOrigin，避免同源/打包 URL 因 CORS 导致加载失败。
+ * （须先设 crossOrigin 再设 src）
+ */
+function configureImageForUrl(img: HTMLImageElement, url: string): void {
+  if (typeof window !== "undefined") {
+    try {
+      if (url.startsWith("data:") || url.startsWith("blob:")) {
+        // 本地 data/blob 不设 crossOrigin
+      } else {
+        const abs = new URL(url, window.location.href);
+        if (
+          (abs.protocol === "http:" || abs.protocol === "https:") &&
+          abs.origin !== window.location.origin
+        ) {
+          img.crossOrigin = "anonymous";
+        }
+      }
+    } catch {
+      /* 非法 URL 时直接赋值 */
+    }
+  }
+  img.src = url;
+}
+
+/** 关卡选择等：缩略图加载失败时显示占位，避免裂图 */
+function LevelThumbnailImage({
+  src,
+  className,
+}: {
+  src: string;
+  className?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return <span className="text-3xl">🐍</span>;
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      className={className ?? "w-full h-full object-cover"}
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 type Position = { x: number; y: number };
 type Direction = { x: number; y: number };
 type GameState = "menu" | "levelSelect" | "settings" | "playing";
@@ -364,8 +444,7 @@ export default function App() {
         // 加载蛇的默认样式（全蛇贴图，assets/img 以 snack 开头）
         if (config.fullSnakeTexture) {
           const snakeImg = new Image();
-          snakeImg.src = config.fullSnakeTexture;
-          snakeImg.crossOrigin = "anonymous";
+          configureImageForUrl(snakeImg, config.fullSnakeTexture);
           newAssets[level].fullSnakeTexture = {
             type: "image",
             src: config.fullSnakeTexture,
@@ -376,8 +455,7 @@ export default function App() {
         // 加载缩略图
         if (config.thumbnail) {
           const img = new Image();
-          img.src = config.thumbnail;
-          img.crossOrigin = "anonymous";
+          configureImageForUrl(img, config.thumbnail);
           newAssets[level].thumbnail = {
             type: "image",
             src: config.thumbnail,
@@ -390,8 +468,7 @@ export default function App() {
           newAssets[level].backgrounds = config.backgrounds.map(
             (url: string) => {
               const img = new Image();
-              img.src = url;
-              img.crossOrigin = "anonymous";
+              configureImageForUrl(img, url);
               return {
                 type: "image" as const,
                 src: url,
@@ -402,8 +479,7 @@ export default function App() {
         } else if ("background" in config && config.background) {
           const url = config.background;
           const img = new Image();
-          img.src = url;
-          img.crossOrigin = "anonymous";
+          configureImageForUrl(img, url);
           newAssets[level].background = {
             type: "image",
             src: url,
@@ -504,7 +580,7 @@ export default function App() {
                   return { type: asset.type, src: asset.src, element: video };
                 } else {
                   const img = new Image();
-                  img.src = asset.src;
+                  configureImageForUrl(img, asset.src);
                   return { type: asset.type, src: asset.src, element: img };
                 }
               });
@@ -538,7 +614,7 @@ export default function App() {
                 levelAssets.background = { type, src, element: video };
               } else {
                 const img = new Image();
-                img.src = src;
+                configureImageForUrl(img, src);
                 img.addEventListener("load", () => {
                   console.log(`关卡${level}：图片加载成功`);
                 });
@@ -552,7 +628,7 @@ export default function App() {
             if (assets.snakeHead) {
               const { type, src } = assets.snakeHead;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeHead = { type, src, element: img };
             }
 
@@ -560,35 +636,35 @@ export default function App() {
             if (assets.snakeHeadUp) {
               const { type, src } = assets.snakeHeadUp;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeHeadUp = { type, src, element: img };
             }
 
             if (assets.snakeHeadDown) {
               const { type, src } = assets.snakeHeadDown;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeHeadDown = { type, src, element: img };
             }
 
             if (assets.snakeHeadLeft) {
               const { type, src } = assets.snakeHeadLeft;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeHeadLeft = { type, src, element: img };
             }
 
             if (assets.snakeHeadRight) {
               const { type, src } = assets.snakeHeadRight;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeHeadRight = { type, src, element: img };
             }
 
             if (assets.snakeTail) {
               const { type, src } = assets.snakeTail;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeTail = { type, src, element: img };
             }
 
@@ -596,28 +672,28 @@ export default function App() {
             if (assets.snakeTailUp) {
               const { type, src } = assets.snakeTailUp;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeTailUp = { type, src, element: img };
             }
 
             if (assets.snakeTailDown) {
               const { type, src } = assets.snakeTailDown;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeTailDown = { type, src, element: img };
             }
 
             if (assets.snakeTailLeft) {
               const { type, src } = assets.snakeTailLeft;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeTailLeft = { type, src, element: img };
             }
 
             if (assets.snakeTailRight) {
               const { type, src } = assets.snakeTailRight;
               const img = new Image();
-              img.src = src;
+              configureImageForUrl(img, src);
               levelAssets.snakeTailRight = { type, src, element: img };
             }
 
@@ -639,7 +715,7 @@ export default function App() {
                   levelAssets.snakeBody = { type, src, element: video };
                 } else {
                   const img = new Image();
-                  img.src = src;
+                  configureImageForUrl(img, src);
                   levelAssets.snakeBody = { type, src, element: img };
                 }
               }
@@ -662,7 +738,7 @@ export default function App() {
                   levelAssets.snakeBodyUp = { type, src, element: video };
                 } else {
                   const img = new Image();
-                  img.src = src;
+                  configureImageForUrl(img, src);
                   levelAssets.snakeBodyUp = { type, src, element: img };
                 }
               }
@@ -684,7 +760,7 @@ export default function App() {
                   levelAssets.snakeBodyDown = { type, src, element: video };
                 } else {
                   const img = new Image();
-                  img.src = src;
+                  configureImageForUrl(img, src);
                   levelAssets.snakeBodyDown = { type, src, element: img };
                 }
               }
@@ -706,7 +782,7 @@ export default function App() {
                   levelAssets.snakeBodyLeft = { type, src, element: video };
                 } else {
                   const img = new Image();
-                  img.src = src;
+                  configureImageForUrl(img, src);
                   levelAssets.snakeBodyLeft = { type, src, element: img };
                 }
               }
@@ -728,7 +804,7 @@ export default function App() {
                   levelAssets.snakeBodyRight = { type, src, element: video };
                 } else {
                   const img = new Image();
-                  img.src = src;
+                  configureImageForUrl(img, src);
                   levelAssets.snakeBodyRight = { type, src, element: img };
                 }
               }
@@ -736,7 +812,7 @@ export default function App() {
 
             if (assets.thumbnail) {
               const img = new Image();
-              img.src = assets.thumbnail.src;
+              configureImageForUrl(img, assets.thumbnail.src);
               levelAssets.thumbnail = {
                 type: assets.thumbnail.type,
                 src: assets.thumbnail.src,
@@ -1842,8 +1918,18 @@ export default function App() {
         assets.backgrounds[
           Math.min(backgroundIndex, assets.backgrounds.length - 1)
         ];
-      if (currentBg?.element) {
-        ctx.drawImage(currentBg.element, 0, 0, drawWidth, drawHeight);
+      if (
+        currentBg?.element &&
+        safeDrawImageDest(
+          ctx,
+          currentBg.element,
+          0,
+          0,
+          drawWidth,
+          drawHeight,
+        )
+      ) {
+        // 背景已绘制
       } else {
         ctx.fillStyle = "#c0c0c0";
         ctx.fillRect(0, 0, drawWidth, drawHeight);
@@ -1860,8 +1946,18 @@ export default function App() {
           ctx.stroke();
         }
       }
-    } else if (assets.background?.element) {
-      ctx.drawImage(assets.background.element, 0, 0, drawWidth, drawHeight);
+    } else if (
+      assets.background?.element &&
+      safeDrawImageDest(
+        ctx,
+        assets.background.element,
+        0,
+        0,
+        drawWidth,
+        drawHeight,
+      )
+    ) {
+      // 背景已绘制
     } else {
       ctx.fillStyle = "#c0c0c0";
       ctx.fillRect(0, 0, drawWidth, drawHeight);
@@ -2053,43 +2149,44 @@ export default function App() {
         // 安全检查：确保图片/视频已加载且状态正常
         const element = asset.element;
         const drawWithRotation = (el: HTMLImageElement | HTMLVideoElement) => {
-          if (rotation !== 0) {
-            // 需要旋转：保存画布状态，移动到中心点，旋转，绘制，恢复状态
-            ctx.save();
-            ctx.translate(
-              x + offset + scaledSize / 2,
-              y + offset + scaledSize / 2,
-            );
-            ctx.rotate(rotation);
-            ctx.drawImage(
-              el,
-              -scaledSize / 2,
-              -scaledSize / 2,
-              scaledSize,
-              scaledSize,
-            );
-            ctx.restore();
-          } else {
-            // 不需要旋转：直接绘制
-            ctx.drawImage(el, x + offset, y + offset, scaledSize, scaledSize);
+          if (!isDrawableCanvasImageSource(el)) {
+            drawDefaultSnake();
+            return;
+          }
+          try {
+            if (rotation !== 0) {
+              ctx.save();
+              ctx.translate(
+                x + offset + scaledSize / 2,
+                y + offset + scaledSize / 2,
+              );
+              ctx.rotate(rotation);
+              ctx.drawImage(
+                el,
+                -scaledSize / 2,
+                -scaledSize / 2,
+                scaledSize,
+                scaledSize,
+              );
+              ctx.restore();
+            } else {
+              ctx.drawImage(el, x + offset, y + offset, scaledSize, scaledSize);
+            }
+          } catch {
+            drawDefaultSnake();
           }
         };
 
         if (element instanceof HTMLImageElement) {
-          // 检查图片是否已完成加载且没有错误
-          if (element.complete && element.naturalWidth > 0) {
+          if (isDrawableCanvasImageSource(element)) {
             drawWithRotation(element);
           } else {
-            // 图片还未加载完成，使用默认绘制
             drawDefaultSnake();
           }
         } else if (element instanceof HTMLVideoElement) {
-          // 检查视频是否可播放
-          if (element.readyState >= 2) {
-            // HAVE_CURRENT_DATA
+          if (isDrawableCanvasImageSource(element)) {
             drawWithRotation(element);
           } else {
-            // 视频还未就绪，使用默认绘制
             drawDefaultSnake();
           }
         } else {
@@ -2782,7 +2879,7 @@ export default function App() {
             };
           });
         };
-        img.src = src;
+        configureImageForUrl(img, src);
       }
     };
     reader.readAsDataURL(file);
@@ -2887,15 +2984,10 @@ export default function App() {
                   className="win95-button bg-[#c0c0c0] p-3 hover:bg-[#dfdfdf] flex flex-col items-center gap-2 min-w-0"
                 >
                   <div className="w-full aspect-square min-h-[64px] win95-inset bg-white flex items-center justify-center overflow-hidden relative">
-                    {getLevelAssets(1).thumbnail?.element ? (
-                      <img
-                        src={getLevelAssets(1).thumbnail.src}
-                        alt=""
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <span className="text-3xl">🐍</span>
-                    )}
+                    <LevelThumbnailImage
+                      src={getLevelAssets(1).thumbnail?.src ?? ""}
+                      className="w-full h-full object-cover"
+                    />
                     {/* 播放图标覆盖层 */}
                     <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
                       {/* 纯三角形播放图标 */}
@@ -2927,15 +3019,10 @@ export default function App() {
                       className="win95-button bg-[#c0c0c0] p-3 hover:bg-[#dfdfdf] flex flex-col items-center gap-2 min-w-0"
                     >
                       <div className="w-full aspect-square min-h-[64px] win95-inset bg-white flex items-center justify-center overflow-hidden">
-                        {assets.thumbnail?.element ? (
-                          <img
-                            src={assets.thumbnail.src}
-                            alt=""
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <span className="text-3xl">🐍</span>
-                        )}
+                        <LevelThumbnailImage
+                          src={assets.thumbnail?.src ?? ""}
+                          className="w-full h-full object-cover"
+                        />
                       </div>
                       <div className="text-xs text-center">
                         <div className="font-bold">关卡 {config.id}</div>
@@ -3023,8 +3110,7 @@ export default function App() {
 
                           if (config.thumbnail) {
                             const img = new Image();
-                            img.src = config.thumbnail;
-                            img.crossOrigin = "anonymous";
+                            configureImageForUrl(img, config.thumbnail);
                             newAssets.thumbnail = {
                               type: "image",
                               src: config.thumbnail,
@@ -3039,8 +3125,7 @@ export default function App() {
                             newAssets.backgrounds = config.backgrounds.map(
                               (url: string) => {
                                 const img = new Image();
-                                img.src = url;
-                                img.crossOrigin = "anonymous";
+                                configureImageForUrl(img, url);
                                 return {
                                   type: "image" as const,
                                   src: url,
@@ -3054,8 +3139,7 @@ export default function App() {
                           ) {
                             const url = config.background;
                             const img = new Image();
-                            img.src = url;
-                            img.crossOrigin = "anonymous";
+                            configureImageForUrl(img, url);
                             newAssets.background = {
                               type: "image",
                               src: url,
@@ -3065,8 +3149,10 @@ export default function App() {
 
                           if (config.fullSnakeTexture) {
                             const snakeImg = new Image();
-                            snakeImg.src = config.fullSnakeTexture;
-                            snakeImg.crossOrigin = "anonymous";
+                            configureImageForUrl(
+                              snakeImg,
+                              config.fullSnakeTexture,
+                            );
                             newAssets.fullSnakeTexture = {
                               type: "image",
                               src: config.fullSnakeTexture,

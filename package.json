@@ -8,7 +8,8 @@
     "start": "vite",
     "build": "vite build",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d build"
+    "deploy": "gh-pages -d build --add --nojekyll",
+    "deploy:clean-cache": "node -e \"require('gh-pages').clean()\""
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.3",
