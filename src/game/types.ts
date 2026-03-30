@@ -2,12 +2,23 @@ export type Position = { x: number; y: number };
 export type Direction = { x: number; y: number };
 export type GameState = "menu" | "levelSelect" | "settings" | "playing";
 
+export type LevelMode =
+  | "classic"
+  | "shadow"
+  | "traffic"
+  | "growing"
+  | "drunk"
+  | "speed"
+  | "blink"
+  | "escape";
+
 
 export interface LevelConfig {
   id: number;
   chapter: number;
   name: string;
-  mode: string;
+  title: string;
+  mode: LevelMode;
   desc: string;
 }
 

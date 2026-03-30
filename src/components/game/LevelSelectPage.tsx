@@ -100,7 +100,7 @@ export function LevelSelectPage({
                   <div className="text-xs text-center">
                     <div className="font-bold">Level {config.id}</div>
                     <div className="text-[10px] text-gray-600 line-clamp-2">
-                      {config.mode}
+                      {config.title}
                     </div>
                   </div>
                 </button>

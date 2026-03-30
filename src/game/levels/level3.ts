@@ -4,6 +4,7 @@ export const level3: LevelConfig = {
   id: 3,
   chapter: 1,
   name: "Level 3: Zulassung",
-  mode: "Zulassung",
+  title: "Zulassung",
+  mode: "traffic",
   desc: "Nur gruene Kugeln sind erlaubt.",
 };

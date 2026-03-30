@@ -4,6 +4,7 @@ export const level6: LevelConfig = {
   id: 6,
   chapter: 2,
   name: "Level 6: Reizüberflutung",
-  mode: "Reizüberflutung",
+  title: "Reizüberflutung",
+  mode: "speed",
   desc: "Die rote Kugel springt fuenfmal pro Sekunde.",
 };
