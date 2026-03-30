@@ -8,6 +8,6 @@
 !.git/
 !.gitignore
 
-node_modules/**
-
-build/**
+# 依赖与构建输出，不纳入版本控制、不上传
+node_modules/
+build/
