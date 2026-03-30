@@ -1,259 +1,51 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+
+import { bgmCover, bgmSelect, bgm1 } from "@/game/assetImports";
+import { DEFAULT_ASSETS_CONFIG } from "@/game/assetsConfig";
+import { LEVEL_PLAY_BGMS } from "@/game/bgm";
 import {
-  ArrowUp,
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  RotateCcw,
-  Pause,
-  Upload,
-  X,
-  Play,
-} from "lucide-react";
-import coverImage from "@/assets/img/game_cover.png";
-import bgmCover from "@/assets/bgm/bgm_cover.mp3";
-import bgmSelect from "@/assets/bgm/bgm_select.mp3";
-// 8 个关卡背景图（assets/pass 内各关卡文件夹）
-import pass1Bg from "@/assets/pass/pass-1/1.png";
-import pass2Bg from "@/assets/pass/pass-2/2.png";
-import pass3Bg from "@/assets/pass/pass-3/3.png";
-import pass4_1 from "@/assets/pass/pass-4/1.png";
-import pass4_2 from "@/assets/pass/pass-4/2.png";
-import pass4_3 from "@/assets/pass/pass-4/3.png";
-import pass4_4 from "@/assets/pass/pass-4/4.png";
-import pass4_5 from "@/assets/pass/pass-4/5.png";
-import pass5Bg from "@/assets/pass/pass-5/5.png";
-import pass6Bg from "@/assets/pass/pass-6/6.png";
-import pass7Bg from "@/assets/pass/pass-7/7.png";
-import pass8Bg from "@/assets/pass/pass-8/8.png";
-// 8 个关卡蛇的默认样式（assets/img 以 snack 开头）
-import snack1 from "@/assets/img/snack-1.png";
-import snack2 from "@/assets/img/snack-2.png";
-import snack3 from "@/assets/img/snack-3.png";
-import snack4 from "@/assets/img/snack-4.png";
-import snack5 from "@/assets/img/snack-5.png";
-import snack6 from "@/assets/img/snack-6.png";
-import snack7 from "@/assets/img/snack-7.png";
-import snack8 from "@/assets/img/snack-8.png";
+  CELL_SIZE,
+  GAME_SPEED,
+  GRID_SIZE,
+  INITIAL_DIRECTION,
+  INITIAL_SNAKE,
+  ASSETS_VERSION,
+} from "@/game/constants";
+import { LEVEL_CONFIGS } from "@/game/levels";
+import {
+  createMutedLoopBackgroundVideo,
+  getSharedImageElement,
+  getSharedVideoElement,
+  isDrawableCanvasImageSource,
+  isVideoAssetUrl,
+  preloadLevelSelectBgmSoft,
+  preloadMenuResources,
+  safeDrawImageDest,
+  waitForAllLevelBackgroundAndThumbnailMedia,
+  waitForAllLevelSnakeAndDetailMedia,
+  waitForAllLevelThumbnailMedia,
+  waitForEnterPagePaint,
+  waitForSingleLevelVisualMedia,
+} from "@/game/media";
+import type {
+  Ball,
+  Direction,
+  EnemySnake,
+  GameState,
+  LevelAssets,
+  MediaAsset,
+  Position,
+} from "@/game/types";
+import { GamePlayScreen } from "@/components/game/GamePlayScreen";
+import { LevelSelectPage } from "@/components/game/LevelSelectPage";
+import { MenuPage } from "@/components/game/MenuPage";
+import { PageLoadingOverlay } from "@/components/game/PageLoadingOverlay";
+import { SettingsPage } from "@/components/game/SettingsPage";
 
-const GRID_SIZE = 20;
-const CELL_SIZE = 24;
-const INITIAL_SNAKE = [{ x: 10, y: 10 }];
-const INITIAL_DIRECTION = { x: 1, y: 0 };
-const GAME_SPEED = 150;
-/** 素材缓存版本，改用 assets/pass 默认背景后设为 2，旧缓存会清空以使用新默认 */
-const ASSETS_VERSION = 2;
-
-/** 图片/视频是否可安全用于 Canvas drawImage（broken 图会抛 InvalidStateError） */
-function isDrawableCanvasImageSource(
-  el: HTMLImageElement | HTMLVideoElement | undefined,
-): el is HTMLImageElement | HTMLVideoElement {
-  if (!el) return false;
-  if (el instanceof HTMLImageElement) {
-    return el.complete && el.naturalWidth > 0 && el.naturalHeight > 0;
-  }
-  if (el instanceof HTMLVideoElement) {
-    return el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
-  }
-  return false;
+/** 让出主线程，避免长时间同步任务阻塞点击等交互 */
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
-
-function safeDrawImageDest(
-  ctx: CanvasRenderingContext2D,
-  el: HTMLImageElement | HTMLVideoElement,
-  dx: number,
-  dy: number,
-  dw: number,
-  dh: number,
-): boolean {
-  if (!isDrawableCanvasImageSource(el)) return false;
-  try {
-    ctx.drawImage(el, dx, dy, dw, dh);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * 为 img 设置 src；仅对外域 http(s) 资源设置 crossOrigin，避免同源/打包 URL 因 CORS 导致加载失败。
- * （须先设 crossOrigin 再设 src）
- */
-function configureImageForUrl(img: HTMLImageElement, url: string): void {
-  if (typeof window !== "undefined") {
-    try {
-      if (url.startsWith("data:") || url.startsWith("blob:")) {
-        // 本地 data/blob 不设 crossOrigin
-      } else {
-        const abs = new URL(url, window.location.href);
-        if (
-          (abs.protocol === "http:" || abs.protocol === "https:") &&
-          abs.origin !== window.location.origin
-        ) {
-          img.crossOrigin = "anonymous";
-        }
-      }
-    } catch {
-      /* 非法 URL 时直接赋值 */
-    }
-  }
-  img.src = url;
-}
-
-/** 关卡选择等：缩略图加载失败时显示占位，避免裂图 */
-function LevelThumbnailImage({
-  src,
-  className,
-}: {
-  src: string;
-  className?: string;
-}) {
-  const [failed, setFailed] = useState(false);
-  if (!src || failed) {
-    return <span className="text-3xl">🐍</span>;
-  }
-  return (
-    <img
-      src={src}
-      alt=""
-      className={className ?? "w-full h-full object-cover"}
-      loading="lazy"
-      decoding="async"
-      onError={() => setFailed(true)}
-    />
-  );
-}
-
-type Position = { x: number; y: number };
-type Direction = { x: number; y: number };
-type GameState = "menu" | "levelSelect" | "settings" | "playing";
-
-interface MediaAsset {
-  type: "image" | "video" | "gif";
-  src: string;
-  element?: HTMLImageElement | HTMLVideoElement;
-  temporary?: boolean; // 标记为临时素材（不保存到localStorage）
-}
-
-interface LevelAssets {
-  background: MediaAsset | null;
-  backgrounds?: MediaAsset[]; // 关卡4：多张背景图（最多7张）
-  fullSnakeTexture?: MediaAsset | null; // 全蛇贴图：一张图覆盖头身尾，可旋转
-  snakeHead: MediaAsset | null;
-  snakeHeadUp?: MediaAsset | null; // 蛇头向上
-  snakeHeadDown?: MediaAsset | null; // 蛇头向下
-  snakeHeadLeft?: MediaAsset | null; // 蛇头向左
-  snakeHeadRight?: MediaAsset | null; // 蛇头向右
-  snakeBody: MediaAsset | null;
-  snakeBodyUp?: MediaAsset | null; // 蛇身向上
-  snakeBodyDown?: MediaAsset | null; // 蛇身向下
-  snakeBodyLeft?: MediaAsset | null; // 蛇身向左
-  snakeBodyRight?: MediaAsset | null; // 蛇身向右
-  snakeTail: MediaAsset | null;
-  snakeTailUp?: MediaAsset | null; // 蛇尾向上
-  snakeTailDown?: MediaAsset | null; // 蛇尾向下
-  snakeTailLeft?: MediaAsset | null; // 蛇尾向左
-  snakeTailRight?: MediaAsset | null; // 蛇尾向右
-  thumbnail: MediaAsset | null;
-}
-
-interface EnemySnake {
-  id: number;
-  position: Position;
-  body: Position[]; // 敌人蛇的身体
-  color: string; // 敌人蛇的颜色
-  path: Position[];
-  pathIndex: number;
-}
-
-// 关卡7：球的数据结构
-interface Ball {
-  id: number;
-  x: number; // 网格坐标
-  y: number;
-  opacity: number; // 透明度 (0-1)
-  spawnTime: number; // 出现时间（毫秒）
-  blinkSpeed: number; // 闪烁速度（毫秒）
-  phaseOffset: number; // 相位偏移（0-1）
-}
-
-const LEVEL_CONFIGS = [
-  {
-    id: 1,
-    chapter: 1,
-    name: "关卡 1: 经典贪吃蛇",
-    mode: "classic",
-    desc: "经典玩法，吃红球变长",
-  },
-  {
-    id: 2,
-    chapter: 1,
-    name: "关卡 2: 影子引导",
-    mode: "shadow",
-    desc: "跟随前方的影子蛇",
-  },
-  {
-    id: 3,
-    chapter: 1,
-    name: "关卡 3: 红绿灯",
-    mode: "traffic",
-    desc: "只能吃绿色的球",
-  },
-  {
-    id: 4,
-    chapter: 2,
-    name: "关卡 4: 成长世界",
-    mode: "growing",
-    desc: "吃球后地图变大",
-  },
-  {
-    id: 5,
-    chapter: 2,
-    name: "关卡 5: 迷乱酒局",
-    mode: "drunk",
-    desc: "按键会随机变化",
-  },
-  {
-    id: 6,
-    chapter: 2,
-    name: "关卡 6: 极速挑战",
-    mode: "speed",
-    desc: "红球每秒5次随机跳动",
-  },
-  {
-    id: 7,
-    chapter: 3,
-    name: "关卡 7: 闪烁迷阵",
-    mode: "blink",
-    desc: "多球闪烁，一秒3次变换",
-  },
-  {
-    id: 8,
-    chapter: 3,
-    name: "关卡 8: 逃脱追捕",
-    mode: "escape",
-    desc: "躲避小蛇的追捕",
-  },
-] as const;
-
-// 默认素材配置（使用 assets/pass 背景 + assets/img 蛇样式）
-type DefaultAssetConfigEntry =
-  | { background: string; thumbnail: string; fullSnakeTexture?: string }
-  | { backgrounds: string[]; thumbnail: string; fullSnakeTexture?: string };
-const DEFAULT_ASSETS_CONFIG: Record<number, DefaultAssetConfigEntry> = {
-  1: { background: pass1Bg, thumbnail: pass1Bg, fullSnakeTexture: snack1 },
-  2: { background: pass2Bg, thumbnail: pass2Bg, fullSnakeTexture: snack2 },
-  3: { background: pass3Bg, thumbnail: pass3Bg, fullSnakeTexture: snack3 },
-  4: {
-    backgrounds: [pass4_1, pass4_2, pass4_3, pass4_4, pass4_5],
-    thumbnail: pass4_1,
-    fullSnakeTexture: snack4,
-  },
-  5: { background: pass5Bg, thumbnail: pass5Bg, fullSnakeTexture: snack5 },
-  6: { background: pass6Bg, thumbnail: pass6Bg, fullSnakeTexture: snack6 },
-  7: { background: pass7Bg, thumbnail: pass7Bg, fullSnakeTexture: snack7 },
-  8: { background: pass8Bg, thumbnail: pass8Bg, fullSnakeTexture: snack8 },
-};
 
 export default function App() {
   const [gameState, setGameState] = useState<GameState>("menu");
@@ -262,6 +54,10 @@ export default function App() {
   const [levelAssets, setLevelAssets] = useState<Record<number, LevelAssets>>(
     {},
   );
+  const [menuReady, setMenuReady] = useState(false);
+  const [pageTransitionLoading, setPageTransitionLoading] = useState(false);
+  const [pageLoadingHint, setPageLoadingHint] = useState("");
+  const fullAssetsLoadPromiseRef = useRef<Promise<void> | null>(null);
   const [snake, setSnake] = useState<Position[]>(INITIAL_SNAKE);
   const [food, setFood] = useState<Position>({ x: 15, y: 15 });
   const [direction, setDirection] = useState<Direction>(INITIAL_DIRECTION);
@@ -346,16 +142,17 @@ export default function App() {
   });
 
   // 获取当前关卡的蛇缩放和间距
-  const snakeScale = snakeScaleByLevel[currentLevel] ?? 1;
-  const snakeSpacingFactor = snakeSpacingFactorByLevel[currentLevel] ?? 0;
+  const snakeScale = snakeScaleByLevel[currentLevel] ?? 4;
+  const snakeSpacingFactor = snakeSpacingFactorByLevel[currentLevel] ?? 0.5;
 
   const directionRef = useRef<Direction>(INITIAL_DIRECTION);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const snakeRef = useRef<Position[]>(INITIAL_SNAKE); // 保存蛇的引用以便在interval中访问
   const ballsRef = useRef<Ball[]>([]); // 保存球的引用以便在interval中访问
   const bgmRef = useRef<HTMLAudioElement>(null);
+  const levelAssetsRef = useRef<Record<number, LevelAssets>>({});
 
-  // 根据当前页面循环播放对应 BGM：封面=bgm_cover，关卡选择=bgm_select
+  // BGM：封面=bgm_cover，选关=bgm_select，游玩中=bgm_1～bgm_8（随关卡按需加载，未就绪时 play 失败则静默），设置页暂停
   useEffect(() => {
     const audio = bgmRef.current;
     if (!audio) return;
@@ -363,15 +160,23 @@ export default function App() {
     if (gameState === "menu") {
       audio.src = bgmCover;
       audio.loop = true;
+      audio.load();
       audio.play().catch(() => {});
     } else if (gameState === "levelSelect") {
       audio.src = bgmSelect;
       audio.loop = true;
+      audio.load();
+      audio.play().catch(() => {});
+    } else if (gameState === "playing") {
+      const i = Math.min(Math.max(currentLevel, 1), 8) - 1;
+      audio.src = LEVEL_PLAY_BGMS[i] ?? bgm1;
+      audio.loop = true;
+      audio.load();
       audio.play().catch(() => {});
     } else {
       audio.pause();
     }
-  }, [gameState]);
+  }, [gameState, currentLevel]);
 
   const getLevelConfig = (levelId: number) =>
     LEVEL_CONFIGS.find((l) => l.id === levelId);
@@ -397,33 +202,39 @@ export default function App() {
       snakeTailRight: null,
       thumbnail: null,
     };
+  const getLevelAssetsFromRef = (levelId: number): LevelAssets =>
+    levelAssetsRef.current[levelId] || getLevelAssets(levelId);
 
-  // 获取当前背景（用于UI外的背景填充）
-  const getCurrentBackground = (): MediaAsset | null => {
-    const config = getLevelConfig(currentLevel);
-    const assets = getLevelAssets(currentLevel);
-
-    if (
-      config?.mode === "growing" &&
-      assets.backgrounds &&
-      assets.backgrounds.length > 0
-    ) {
-      // 关卡4：使用对应索引的背景
-      const bg =
-        assets.backgrounds[
-          Math.min(backgroundIndex, assets.backgrounds.length - 1)
-        ];
-      return bg ?? null;
-    }
-    if (assets.background) {
-      return assets.background;
-    }
-    return null;
-  };
-
-  // 加载默认素材和用户自定义素材（应用启动时）
   useEffect(() => {
+    levelAssetsRef.current = levelAssets;
+  }, [levelAssets]);
+
+  useEffect(() => {
+    if (!pageTransitionLoading) return;
+    const prevBody = document.body.style.cursor;
+    const prevHtml = document.documentElement.style.cursor;
+    document.body.style.cursor = "wait";
+    document.documentElement.style.cursor = "wait";
+    return () => {
+      document.body.style.cursor = prevBody;
+      document.documentElement.style.cursor = prevHtml;
+    };
+  }, [pageTransitionLoading]);
+
+  // 加载默认素材和用户自定义素材：先首页资源 → 显示菜单 → 组装关卡素材写入 state；
+  // 后台优先解码各关「背景 + 选关缩略图」，再解码蛇贴图；选关 BGM 仅软预载，各关游玩 BGM 进入游玩时再按需加载
+  useEffect(() => {
+    let cancelled = false;
+
     const loadAssets = async () => {
+      await preloadMenuResources().catch(() => {});
+      if (cancelled) return;
+      setMenuReady(true);
+      await waitForEnterPagePaint();
+      if (cancelled) return;
+      await yieldToMain();
+      if (cancelled) return;
+
       const newAssets: Record<number, LevelAssets> = {};
 
       // 首先加载默认素材
@@ -443,8 +254,7 @@ export default function App() {
 
         // 加载蛇的默认样式（全蛇贴图，assets/img 以 snack 开头）
         if (config.fullSnakeTexture) {
-          const snakeImg = new Image();
-          configureImageForUrl(snakeImg, config.fullSnakeTexture);
+          const snakeImg = getSharedImageElement(config.fullSnakeTexture);
           newAssets[level].fullSnakeTexture = {
             type: "image",
             src: config.fullSnakeTexture,
@@ -454,8 +264,7 @@ export default function App() {
 
         // 加载缩略图
         if (config.thumbnail) {
-          const img = new Image();
-          configureImageForUrl(img, config.thumbnail);
+          const img = getSharedImageElement(config.thumbnail);
           newAssets[level].thumbnail = {
             type: "image",
             src: config.thumbnail,
@@ -467,8 +276,7 @@ export default function App() {
         if ("backgrounds" in config && config.backgrounds?.length) {
           newAssets[level].backgrounds = config.backgrounds.map(
             (url: string) => {
-              const img = new Image();
-              configureImageForUrl(img, url);
+              const img = getSharedImageElement(url);
               return {
                 type: "image" as const,
                 src: url,
@@ -478,19 +286,30 @@ export default function App() {
           );
         } else if ("background" in config && config.background) {
           const url = config.background;
-          const img = new Image();
-          configureImageForUrl(img, url);
-          newAssets[level].background = {
-            type: "image",
-            src: url,
-            element: img,
-          };
+          if (isVideoAssetUrl(url)) {
+            const video = createMutedLoopBackgroundVideo(url);
+            newAssets[level].background = {
+              type: "video",
+              src: url,
+              element: video,
+            };
+          } else {
+            const img = getSharedImageElement(url);
+            newAssets[level].background = {
+              type: "image",
+              src: url,
+              element: img,
+            };
+          }
         }
+
+        if (cancelled) return;
+        await yieldToMain();
       }
 
       console.log("✅ 默认素材加载完成");
 
-      // 素材版本：旧缓存清空以使用 pass 文件夹默认背景
+      // 素材版本：旧缓存清空以使用最新默认素材
       const storedVersion = parseInt(
         localStorage.getItem("snakeGameAssetsVersion") || "0",
         10,
@@ -498,7 +317,7 @@ export default function App() {
       if (storedVersion < ASSETS_VERSION) {
         localStorage.removeItem("snakeGameCustomAssets");
         localStorage.setItem("snakeGameAssetsVersion", String(ASSETS_VERSION));
-        console.log("🔄 已清除旧素材缓存，使用 pass 文件夹默认背景");
+        console.log("🔄 已清除旧素材缓存，使用最新默认素材");
       }
 
       // 检查localStorage使用情况
@@ -526,6 +345,8 @@ export default function App() {
 
           // 合并自定义素材（会覆盖默认素材）
           for (const [levelId, assets] of Object.entries(customAssets)) {
+            if (cancelled) return;
+            await yieldToMain();
             const level = parseInt(levelId);
             if (!newAssets[level]) {
               newAssets[level] = {
@@ -564,23 +385,10 @@ export default function App() {
               );
               levelAssets.backgrounds = assets.backgrounds.map((asset: any) => {
                 if (asset.type === "video") {
-                  const video = document.createElement("video");
-                  video.src = asset.src;
-                  video.loop = true;
-                  video.muted = true;
-                  video.autoplay = true;
-                  video.playsInline = true;
-                  video.addEventListener("loadeddata", () => {
-                    video
-                      .play()
-                      .catch((err) =>
-                        console.log("多背景视频自动播放失败:", err),
-                      );
-                  });
+                  const video = getSharedVideoElement(asset.src);
                   return { type: asset.type, src: asset.src, element: video };
                 } else {
-                  const img = new Image();
-                  configureImageForUrl(img, asset.src);
+                  const img = getSharedImageElement(asset.src);
                   return { type: asset.type, src: asset.src, element: img };
                 }
               });
@@ -593,28 +401,13 @@ export default function App() {
                 `关卡${level}：加载${type}背景，大小：${(src.length / 1024).toFixed(2)}KB`,
               );
               if (type === "video") {
-                const video = document.createElement("video");
-                video.src = src;
-                video.loop = true;
-                video.muted = true;
-                video.autoplay = true;
-                video.playsInline = true;
-                // 立������加载视频
-                video.load();
-                // 尝试播放视频
-                video.addEventListener("loadeddata", () => {
-                  console.log(`关卡${level}：视频数据已加载，开始播放`);
-                  video
-                    .play()
-                    .catch((err) => console.log("视频自动播放失败:", err));
-                });
+                const video = getSharedVideoElement(src);
                 video.addEventListener("error", (e) => {
                   console.error(`关卡${level}：视频加载失败`, e);
                 });
                 levelAssets.background = { type, src, element: video };
               } else {
-                const img = new Image();
-                configureImageForUrl(img, src);
+                const img = getSharedImageElement(src);
                 img.addEventListener("load", () => {
                   console.log(`关卡${level}：图片加载成功`);
                 });
@@ -627,73 +420,63 @@ export default function App() {
 
             if (assets.snakeHead) {
               const { type, src } = assets.snakeHead;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeHead = { type, src, element: img };
             }
 
             // 加载4个方向的蛇头
             if (assets.snakeHeadUp) {
               const { type, src } = assets.snakeHeadUp;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeHeadUp = { type, src, element: img };
             }
 
             if (assets.snakeHeadDown) {
               const { type, src } = assets.snakeHeadDown;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeHeadDown = { type, src, element: img };
             }
 
             if (assets.snakeHeadLeft) {
               const { type, src } = assets.snakeHeadLeft;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeHeadLeft = { type, src, element: img };
             }
 
             if (assets.snakeHeadRight) {
               const { type, src } = assets.snakeHeadRight;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeHeadRight = { type, src, element: img };
             }
 
             if (assets.snakeTail) {
               const { type, src } = assets.snakeTail;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeTail = { type, src, element: img };
             }
 
             // 加载4个方向的蛇尾
             if (assets.snakeTailUp) {
               const { type, src } = assets.snakeTailUp;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeTailUp = { type, src, element: img };
             }
 
             if (assets.snakeTailDown) {
               const { type, src } = assets.snakeTailDown;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeTailDown = { type, src, element: img };
             }
 
             if (assets.snakeTailLeft) {
               const { type, src } = assets.snakeTailLeft;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeTailLeft = { type, src, element: img };
             }
 
             if (assets.snakeTailRight) {
               const { type, src } = assets.snakeTailRight;
-              const img = new Image();
-              configureImageForUrl(img, src);
+              const img = getSharedImageElement(src);
               levelAssets.snakeTailRight = { type, src, element: img };
             }
 
@@ -706,16 +489,10 @@ export default function App() {
               if (bodyAsset) {
                 const { type, src } = bodyAsset;
                 if (type === "video") {
-                  const video = document.createElement("video");
-                  video.src = src;
-                  video.loop = true;
-                  video.muted = true;
-                  video.playsInline = true;
-                  video.autoplay = true;
+                  const video = getSharedVideoElement(src);
                   levelAssets.snakeBody = { type, src, element: video };
                 } else {
-                  const img = new Image();
-                  configureImageForUrl(img, src);
+                  const img = getSharedImageElement(src);
                   levelAssets.snakeBody = { type, src, element: img };
                 }
               }
@@ -729,16 +506,10 @@ export default function App() {
               if (bodyAsset) {
                 const { type, src } = bodyAsset;
                 if (type === "video") {
-                  const video = document.createElement("video");
-                  video.src = src;
-                  video.loop = true;
-                  video.muted = true;
-                  video.playsInline = true;
-                  video.autoplay = true;
+                  const video = getSharedVideoElement(src);
                   levelAssets.snakeBodyUp = { type, src, element: video };
                 } else {
-                  const img = new Image();
-                  configureImageForUrl(img, src);
+                  const img = getSharedImageElement(src);
                   levelAssets.snakeBodyUp = { type, src, element: img };
                 }
               }
@@ -751,16 +522,10 @@ export default function App() {
               if (bodyAsset) {
                 const { type, src } = bodyAsset;
                 if (type === "video") {
-                  const video = document.createElement("video");
-                  video.src = src;
-                  video.loop = true;
-                  video.muted = true;
-                  video.playsInline = true;
-                  video.autoplay = true;
+                  const video = getSharedVideoElement(src);
                   levelAssets.snakeBodyDown = { type, src, element: video };
                 } else {
-                  const img = new Image();
-                  configureImageForUrl(img, src);
+                  const img = getSharedImageElement(src);
                   levelAssets.snakeBodyDown = { type, src, element: img };
                 }
               }
@@ -773,16 +538,10 @@ export default function App() {
               if (bodyAsset) {
                 const { type, src } = bodyAsset;
                 if (type === "video") {
-                  const video = document.createElement("video");
-                  video.src = src;
-                  video.loop = true;
-                  video.muted = true;
-                  video.playsInline = true;
-                  video.autoplay = true;
+                  const video = getSharedVideoElement(src);
                   levelAssets.snakeBodyLeft = { type, src, element: video };
                 } else {
-                  const img = new Image();
-                  configureImageForUrl(img, src);
+                  const img = getSharedImageElement(src);
                   levelAssets.snakeBodyLeft = { type, src, element: img };
                 }
               }
@@ -795,24 +554,17 @@ export default function App() {
               if (bodyAsset) {
                 const { type, src } = bodyAsset;
                 if (type === "video") {
-                  const video = document.createElement("video");
-                  video.src = src;
-                  video.loop = true;
-                  video.muted = true;
-                  video.playsInline = true;
-                  video.autoplay = true;
+                  const video = getSharedVideoElement(src);
                   levelAssets.snakeBodyRight = { type, src, element: video };
                 } else {
-                  const img = new Image();
-                  configureImageForUrl(img, src);
+                  const img = getSharedImageElement(src);
                   levelAssets.snakeBodyRight = { type, src, element: img };
                 }
               }
             }
 
             if (assets.thumbnail) {
-              const img = new Image();
-              configureImageForUrl(img, assets.thumbnail.src);
+              const img = getSharedImageElement(assets.thumbnail.src);
               levelAssets.thumbnail = {
                 type: assets.thumbnail.type,
                 src: assets.thumbnail.src,
@@ -829,10 +581,26 @@ export default function App() {
       }
 
       console.log("🎮 所有素材加载完成，游戏就绪");
+      if (cancelled) return;
+      levelAssetsRef.current = newAssets;
       setLevelAssets(newAssets);
+
+      void (async () => {
+        try {
+          await waitForAllLevelBackgroundAndThumbnailMedia(newAssets);
+          await waitForAllLevelSnakeAndDetailMedia(newAssets);
+        } catch (e) {
+          console.error("素材预载未完成:", e);
+        }
+        void preloadLevelSelectBgmSoft().catch(() => {});
+      })();
     };
 
-    loadAssets();
+    const p = loadAssets();
+    fullAssetsLoadPromiseRef.current = p;
+    return () => {
+      cancelled = true;
+    };
   }, []); // 只在应用启动时运行一次
 
   // 保存用户自定义素材到localStorage（当素材变化时）
@@ -958,10 +726,10 @@ export default function App() {
 
         // 如果还是太大，就不保存
         console.log(
-          "⚠️ 素材过大，无法保存到localStorage（会在会话期间保持可用）",
+          "⚠️ Assets sind zu gross und koennen nicht in localStorage gespeichert werden (in dieser Sitzung weiterhin nutzbar)",
         );
         alert(
-          "⚠️ 素材文件过大\n\n您上传的素材总大小超过了浏览器存储限制（5MB）。\n\n当前状态：\n• 素材可以正常使用（临时模式）\n• 刷新页面后需要重新上传\n\n💡 建议：\n• 使用更小的图片（压缩或降低分辨率）\n• 只上传必要的素材\n• 避免使用视频文件（改用GIF）",
+          "⚠️ Die Asset-Dateien sind zu gross\n\nDie Gesamtgroesse ueberschreitet das Browser-Limit (5MB).\n\nAktueller Status:\n• Assets sind nutzbar (temporärer Modus)\n• Nach Reload erneut hochladen\n\n💡 Tipp:\n• Kleinere Bilder verwenden (komprimieren / Aufloesung senken)\n• Nur notwendige Assets hochladen\n• Wenn moeglich Video durch GIF ersetzen",
         );
         return;
       }
@@ -987,10 +755,10 @@ export default function App() {
           console.error("❌ 重试后仍然失败:", retryError);
         }
         alert(
-          "⚠️ 存储空间不足\n\n部分素材无法保存，但可以正常使用（临时模式）。\n\n💡 提示：\n• 大文件已自动使用临时模式\n• 刷新后需要重新上传大文件\n• 小文件（<100MB）会自动永久保存",
+          "⚠️ Nicht genug Speicherplatz\n\nEinige Assets konnten nicht gespeichert werden, sind aber weiterhin nutzbar (temporärer Modus).\n\n💡 Hinweis:\n• Grosse Dateien nutzen automatisch den temporaeren Modus\n• Nach Reload grosse Dateien erneut hochladen\n• Kleine Dateien (<100MB) werden dauerhaft gespeichert",
         );
       } else {
-        alert("保存素材失败：" + error);
+        alert("Speichern der Assets fehlgeschlagen: " + error);
       }
     }
   }, [levelAssets]);
@@ -1861,17 +1629,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [gameState, isPaused, gameOver, currentLevel]);
 
-  // 确保背景视频播放
-  useEffect(() => {
-    const currentBg = getCurrentBackground();
-    if (currentBg && currentBg.type === "video" && currentBg.element) {
-      const videoElement = currentBg.element as HTMLVideoElement;
-      videoElement.play().catch(() => {
-        // 自动播放可能被浏览器阻止，用户交互后会播放
-      });
-    }
-  }, [gameState, currentLevel, backgroundIndex]);
-
   // 绘制游戏
   useEffect(() => {
     if (gameState !== "playing") return;
@@ -1920,14 +1677,7 @@ export default function App() {
         ];
       if (
         currentBg?.element &&
-        safeDrawImageDest(
-          ctx,
-          currentBg.element,
-          0,
-          0,
-          drawWidth,
-          drawHeight,
-        )
+        safeDrawImageDest(ctx, currentBg.element, 0, 0, drawWidth, drawHeight)
       ) {
         // 背景已绘制
       } else {
@@ -1946,6 +1696,8 @@ export default function App() {
           ctx.stroke();
         }
       }
+    } else if (assets.background?.type === "video") {
+      // 背景由游戏区下层 <video> 显示，Canvas 保持透明以叠放蛇与食物
     } else if (
       assets.background?.element &&
       safeDrawImageDest(
@@ -2575,8 +2327,12 @@ export default function App() {
 
             if (config?.mode === "growing") {
               setMapScale((prev) => Math.min(prev * 2, 20));
-              // 切换到下一张背景（最多7张）
-              setBackgroundIndex((prev) => Math.min(prev + 1, 6));
+              // 每吃一球切到下一张；默认 4 张（1→4），到最后一张后保持
+              setBackgroundIndex((prev) => {
+                const len = levelAssets[currentLevel]?.backgrounds?.length ?? 0;
+                const maxIdx = len > 0 ? len - 1 : 0;
+                return Math.min(prev + 1, maxIdx);
+              });
             }
 
             if (config?.mode === "drunk") {
@@ -2618,12 +2374,13 @@ export default function App() {
     shuffleKeys,
     enemySnakes,
     shadowPath,
+    levelAssets,
   ]);
 
   // 键盘控制
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
-      if (gameState !== "playing" || gameOver) return;
+      if (pageTransitionLoading || gameState !== "playing" || gameOver) return;
 
       if (e.key === " ") {
         e.preventDefault();
@@ -2663,7 +2420,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyPress);
     return () => window.removeEventListener("keydown", handleKeyPress);
-  }, [gameState, gameOver, keyMapping]);
+  }, [pageTransitionLoading, gameState, gameOver, keyMapping]);
 
   // 开始游戏
   const startLevel = (levelId: number) => {
@@ -2723,6 +2480,77 @@ export default function App() {
     // 注意：蛇的初始化在 useEffect 中根��关卡模式处理
   };
 
+  const awaitFullGameAssets = async () => {
+    const p = fullAssetsLoadPromiseRef.current;
+    if (p) await p;
+  };
+
+  const beginStartLevel = async (levelId: number) => {
+    setPageTransitionLoading(true);
+    setPageLoadingHint(`Level ${levelId} wird geladen...`);
+    try {
+      await awaitFullGameAssets();
+      await waitForSingleLevelVisualMedia(getLevelAssetsFromRef(levelId));
+      startLevel(levelId);
+      await waitForEnterPagePaint();
+    } catch {
+      startLevel(levelId);
+      await waitForEnterPagePaint();
+    } finally {
+      setPageTransitionLoading(false);
+    }
+  };
+
+  const goToLevelSelect = async () => {
+    if (gameState === "playing") setIsPaused(true);
+    setPageTransitionLoading(true);
+    setPageLoadingHint("Ressourcen der Levelauswahl werden geladen...");
+    try {
+      await awaitFullGameAssets();
+      await waitForAllLevelThumbnailMedia(levelAssetsRef.current);
+      setGameState("levelSelect");
+      await waitForEnterPagePaint();
+    } catch {
+      setGameState("levelSelect");
+      await waitForEnterPagePaint();
+    } finally {
+      setPageTransitionLoading(false);
+    }
+  };
+
+  const goToSettings = async () => {
+    if (gameState === "playing") setIsPaused(true);
+    setPageTransitionLoading(true);
+    setPageLoadingHint("Ressourcen der Einstellungen werden geladen...");
+    try {
+      await awaitFullGameAssets();
+      await waitForSingleLevelVisualMedia(getLevelAssetsFromRef(selectedLevel));
+      setGameState("settings");
+      await waitForEnterPagePaint();
+    } catch {
+      setGameState("settings");
+      await waitForEnterPagePaint();
+    } finally {
+      setPageTransitionLoading(false);
+    }
+  };
+
+  const goToMenu = async () => {
+    if (gameState === "playing") setIsPaused(true);
+    setPageTransitionLoading(true);
+    setPageLoadingHint("Ressourcen der Startseite werden geladen...");
+    try {
+      await preloadMenuResources();
+      setGameState("menu");
+      await waitForEnterPagePaint();
+    } catch {
+      setGameState("menu");
+      await waitForEnterPagePaint();
+    } finally {
+      setPageTransitionLoading(false);
+    }
+  };
+
   // 处理素材上传
   const handleAssetUpload = (
     levelId: number,
@@ -2749,12 +2577,12 @@ export default function App() {
 
     if (useTemporary) {
       const confirmMsg =
-        `📦 文件较大 (${fileSizeMB.toFixed(2)}MB)\n\n` +
-        `为避免超出浏览器存储限制，此文件将使用"临时模式"：\n` +
-        `✅ 立即可用\n` +
-        `⚠️ 刷新页面后需要重新上传\n\n` +
-        `建议：压缩文件至100MB以下可实现永久保存。\n\n` +
-        `是否继续上传？`;
+        `📦 Die Datei ist gross (${fileSizeMB.toFixed(2)}MB)\n\n` +
+        `Um das Speicherlimit des Browsers nicht zu ueberschreiten, wird der temporaere Modus verwendet:\n` +
+        `✅ Sofort nutzbar\n` +
+        `⚠️ Nach einem Reload muss erneut hochgeladen werden\n\n` +
+        `Tipp: Unter 100MB bleibt die Datei dauerhaft gespeichert.\n\n` +
+        `Upload fortsetzen?`;
 
       if (!confirm(confirmMsg)) {
         return;
@@ -2770,17 +2598,14 @@ export default function App() {
       );
 
       if (mediaType === "video") {
-        const video = document.createElement("video");
-        video.src = src;
-        video.loop = true;
-        video.muted = true;
-        video.autoplay = true;
-        video.playsInline = true;
-        video.load(); // 立即加载
-        video.addEventListener("loadeddata", () => {
-          console.log(`视频上传成功并已加载 - 关卡${levelId}`);
-          video.play().catch((err) => console.log("上传视频播放失败:", err));
-        });
+        const video = getSharedVideoElement(src);
+        video.addEventListener(
+          "loadeddata",
+          () => {
+            console.log(`视频上传成功并已加载 - 关卡${levelId}`);
+          },
+          { once: true },
+        );
         video.addEventListener("error", (e) => {
           console.error(`视频上传失败 - 关卡${levelId}`, e);
         });
@@ -2831,8 +2656,8 @@ export default function App() {
           };
         });
       } else {
-        const img = new Image();
-        img.onload = () => {
+        const img = getSharedImageElement(src);
+        const commit = () => {
           const imgAsset = {
             type: mediaType,
             src,
@@ -2879,7 +2704,11 @@ export default function App() {
             };
           });
         };
-        configureImageForUrl(img, src);
+        if (img.complete && img.naturalWidth > 0) {
+          commit();
+        } else {
+          img.onload = () => commit();
+        }
       }
     };
     reader.readAsDataURL(file);
@@ -2888,1282 +2717,93 @@ export default function App() {
   // 渲染逻辑
   const renderContent = () => {
     if (gameState === "menu") {
-      return (
-        <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
-          {/* 背景图片：预留空间避免加载时闪烁 */}
-          <div
-            className="absolute inset-0 bg-cover bg-center bg-no-repeat bg-[#1a1a2e]"
-            style={{
-              backgroundImage: coverImage ? `url(${coverImage})` : undefined,
-              filter: "blur(8px)",
-              transform: "scale(1.1)",
-            }}
-          />
-          {/* 暗色遮罩 */}
-          <div className="absolute inset-0 bg-black/40" />
-
-          <div className="bg-[#c0c0c0] win95-outset p-1 w-[700px] relative z-10">
-            <div className="bg-gradient-to-r from-[#000080] to-[#1084d0] px-2 py-1 mb-1">
-              <span className="text-white text-sm font-bold">
-                🐍 贪吃蛇游戏
-              </span>
-            </div>
-
-            <div className="bg-[#c0c0c0] p-8 flex flex-col items-center gap-6">
-              {/* 封面图片：固定宽高比，未加载时占位避免闪烁 */}
-              <div className="w-full win95-inset p-1 bg-white aspect-[4/3] min-h-[240px] overflow-hidden flex items-center justify-center">
-                <img
-                  src={coverImage}
-                  alt="游戏封面"
-                  className="w-full h-full object-contain"
-                  style={{ imageRendering: "pixelated" }}
-                />
-              </div>
-
-              <div className="flex flex-col gap-3 w-full max-w-xs">
-                <button
-                  onClick={() => setGameState("levelSelect")}
-                  className="w-full px-8 py-4 win95-button bg-[#c0c0c0] text-lg font-bold hover:bg-[#dfdfdf]"
-                >
-                  <Play className="inline-block w-5 h-5 mr-2" />
-                  开始游戏
-                </button>
-
-                <button
-                  onClick={() => setGameState("settings")}
-                  className="w-full px-8 py-4 win95-button bg-[#c0c0c0] text-lg font-bold hover:bg-[#dfdfdf]"
-                >
-                  <Upload className="inline-block w-5 h-5 mr-2" />
-                  素材设置
-                </button>
-              </div>
-
-              <div className="text-xs text-gray-600 text-center">
-                使用方向键或WASD进行游戏
-                <br />
-                按空格键暂停
-              </div>
-            </div>
-          </div>
-        </div>
-      );
+      return <MenuPage onStart={goToLevelSelect} />;
     }
 
     if (gameState === "levelSelect") {
       return (
-        <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
-          {/* 背景图片：预留底色避免加载时闪烁 */}
-          <div
-            className="absolute inset-0 bg-cover bg-center bg-no-repeat bg-[#1a1a2e]"
-            style={{
-              backgroundImage: coverImage ? `url(${coverImage})` : undefined,
-              filter: "blur(8px)",
-              transform: "scale(1.1)",
-            }}
-          />
-          {/* 暗色遮罩 */}
-          <div className="absolute inset-0 bg-black/40" />
-
-          <div className="bg-[#c0c0c0] win95-outset p-1 w-[95vw] max-w-[1400px] relative z-10">
-            <div className="bg-gradient-to-r from-[#000080] to-[#1084d0] px-2 py-1 flex items-center justify-between mb-1">
-              <span className="text-white text-sm font-bold">关卡选择</span>
-              <button
-                onClick={() => setGameState("menu")}
-                className="w-4 h-4 bg-[#c0c0c0] win95-button text-[8px]"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="bg-[#c0c0c0] p-4">
-              {/* 横向排列9个按钮：缩略图固定 1:1 占位，未加载时避免闪烁 */}
-              <div className="grid grid-cols-9 gap-3">
-                {/* 第一个：从第一关开始 - 使用关卡1的缩略图 */}
-                <button
-                  onClick={() => startLevel(1)}
-                  className="win95-button bg-[#c0c0c0] p-3 hover:bg-[#dfdfdf] flex flex-col items-center gap-2 min-w-0"
-                >
-                  <div className="w-full aspect-square min-h-[64px] win95-inset bg-white flex items-center justify-center overflow-hidden relative">
-                    <LevelThumbnailImage
-                      src={getLevelAssets(1).thumbnail?.src ?? ""}
-                      className="w-full h-full object-cover"
-                    />
-                    {/* 播放图标覆盖层 */}
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                      {/* 纯三角形播放图标 */}
-                      <div
-                        className="w-0 h-0"
-                        style={{
-                          borderLeft: "30px solid white",
-                          borderTop: "20px solid transparent",
-                          borderBottom: "20px solid transparent",
-                          marginLeft: "6px",
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div className="text-xs text-center">
-                    <div className="font-bold">从第一关</div>
-                    <div className="text-[10px] text-gray-600">开始游戏</div>
-                  </div>
-                </button>
-
-                {/* 关卡1-8 */}
-                {LEVEL_CONFIGS.map((config) => {
-                  const assets = getLevelAssets(config.id);
-
-                  return (
-                    <button
-                      key={config.id}
-                      onClick={() => startLevel(config.id)}
-                      className="win95-button bg-[#c0c0c0] p-3 hover:bg-[#dfdfdf] flex flex-col items-center gap-2 min-w-0"
-                    >
-                      <div className="w-full aspect-square min-h-[64px] win95-inset bg-white flex items-center justify-center overflow-hidden">
-                        <LevelThumbnailImage
-                          src={assets.thumbnail?.src ?? ""}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                      <div className="text-xs text-center">
-                        <div className="font-bold">关卡 {config.id}</div>
-                        <div className="text-[10px] text-gray-600 line-clamp-2">
-                          {config.mode}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
+        <LevelSelectPage
+          levelConfigs={LEVEL_CONFIGS}
+          getLevelAssets={getLevelAssets}
+          onBack={goToMenu}
+          onPickLevel={beginStartLevel}
+        />
       );
     }
 
     if (gameState === "settings") {
-      const assets = getLevelAssets(selectedLevel);
-
       return (
-        <div className="min-h-screen bg-[#008080] flex items-center justify-center p-4">
-          <div className="bg-[#c0c0c0] win95-outset p-1 w-[800px] max-h-[90vh] overflow-auto">
-            <div className="bg-gradient-to-r from-[#000080] to-[#1084d0] px-2 py-1 flex items-center justify-between mb-1">
-              <span className="text-white text-sm font-bold">素材设置</span>
-              <button
-                onClick={() => setGameState("menu")}
-                className="w-4 h-4 bg-[#c0c0c0] win95-button text-[8px]"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="bg-[#c0c0c0] p-4">
-              <div className="mb-4">
-                <label className="text-xs font-bold mb-2 block">
-                  选择关卡：
-                </label>
-                <div className="flex gap-2">
-                  <select
-                    value={selectedLevel}
-                    onChange={(e) => setSelectedLevel(Number(e.target.value))}
-                    className="flex-1 win95-inset px-2 py-1 bg-white"
-                  >
-                    {LEVEL_CONFIGS.map((config) => (
-                      <option key={config.id} value={config.id}>
-                        {config.name} - {config.desc}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => {
-                      if (
-                        confirm(
-                          "确定要重置当前关卡的所有素材为默认设置吗？这将清除您上传的自定义素材。",
-                        )
-                      ) {
-                        // 重置当前关卡的素材为默认
-                        const config =
-                          DEFAULT_ASSETS_CONFIG[
-                            selectedLevel as keyof typeof DEFAULT_ASSETS_CONFIG
-                          ];
-                        if (config) {
-                          const newAssets: LevelAssets = {
-                            background: null,
-                            backgrounds: [],
-                            fullSnakeTexture: null,
-                            snakeHead: null,
-                            snakeHeadUp: null,
-                            snakeHeadDown: null,
-                            snakeHeadLeft: null,
-                            snakeHeadRight: null,
-                            snakeBody: null,
-                            snakeBodyUp: null,
-                            snakeBodyDown: null,
-                            snakeBodyLeft: null,
-                            snakeBodyRight: null,
-                            snakeTail: null,
-                            snakeTailUp: null,
-                            snakeTailDown: null,
-                            snakeTailLeft: null,
-                            snakeTailRight: null,
-                            thumbnail: null,
-                          };
-
-                          if (config.thumbnail) {
-                            const img = new Image();
-                            configureImageForUrl(img, config.thumbnail);
-                            newAssets.thumbnail = {
-                              type: "image",
-                              src: config.thumbnail,
-                              element: img,
-                            };
-                          }
-
-                          if (
-                            "backgrounds" in config &&
-                            config.backgrounds?.length
-                          ) {
-                            newAssets.backgrounds = config.backgrounds.map(
-                              (url: string) => {
-                                const img = new Image();
-                                configureImageForUrl(img, url);
-                                return {
-                                  type: "image" as const,
-                                  src: url,
-                                  element: img,
-                                };
-                              },
-                            );
-                          } else if (
-                            "background" in config &&
-                            config.background
-                          ) {
-                            const url = config.background;
-                            const img = new Image();
-                            configureImageForUrl(img, url);
-                            newAssets.background = {
-                              type: "image",
-                              src: url,
-                              element: img,
-                            };
-                          }
-
-                          if (config.fullSnakeTexture) {
-                            const snakeImg = new Image();
-                            configureImageForUrl(
-                              snakeImg,
-                              config.fullSnakeTexture,
-                            );
-                            newAssets.fullSnakeTexture = {
-                              type: "image",
-                              src: config.fullSnakeTexture,
-                              element: snakeImg,
-                            };
-                          }
-
-                          setLevelAssets((prev) => ({
-                            ...prev,
-                            [selectedLevel]: newAssets,
-                          }));
-                        }
-                      }
-                    }}
-                    className="px-3 py-1 win95-button bg-[#c0c0c0] text-xs whitespace-nowrap"
-                  >
-                    🔄 重置默认
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    关卡缩略图
-                  </label>
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file)
-                          handleAssetUpload(selectedLevel, "thumbnail", file);
-                      }}
-                      className="text-xs"
-                    />
-                    {assets.thumbnail && (
-                      <div className="w-16 h-16 win95-inset bg-white overflow-hidden">
-                        <img
-                          src={assets.thumbnail.src}
-                          alt=""
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    {selectedLevel === 4
-                      ? "游戏背景（多张，最多7张）"
-                      : "游戏背景（图片/GIF/视频）"}
-                  </label>
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="file"
-                      accept="image/*,video/*"
-                      multiple={selectedLevel === 4}
-                      onChange={(e) => {
-                        const files = Array.from(
-                          e.target.files || [],
-                        ) as File[];
-                        if (selectedLevel === 4) {
-                          // 关卡4：支持多张背景
-                          files.slice(0, 7).forEach((file: File) => {
-                            handleAssetUpload(
-                              selectedLevel,
-                              "backgrounds",
-                              file,
-                            );
-                          });
-                        } else {
-                          // 其他关卡：单张背景
-                          const file = files[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "background",
-                              file,
-                            );
-                        }
-                      }}
-                      className="text-xs"
-                    />
-                    {selectedLevel === 4 &&
-                    assets.backgrounds &&
-                    assets.backgrounds.length > 0 ? (
-                      <div className="win95-inset bg-white px-2 py-1 text-xs">
-                        已上传 {assets.backgrounds.length} 张
-                        {assets.backgrounds.some((bg) => bg.temporary) && (
-                          <span
-                            className="text-orange-600 ml-1"
-                            title="刷新后需重新上传"
-                          >
-                            ⚠️临时
-                          </span>
-                        )}
-                      </div>
-                    ) : assets.background ? (
-                      <div className="win95-inset bg-white px-2 py-1 text-xs flex items-center gap-1">
-                        <span>
-                          {assets.background.type === "video"
-                            ? "🎥 视频"
-                            : assets.background.type === "gif"
-                              ? "🎞️ GIF"
-                              : "🖼️ 图片"}
-                        </span>
-                        {assets.background.temporary && (
-                          <span
-                            className="text-orange-600"
-                            title="刷新后需��新上传"
-                          >
-                            ⚠️临时
-                          </span>
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    🎨 全蛇贴图（可选）
-                  </label>
-                  <div className="text-[10px] text-gray-600 mb-2">
-                    一张贴图覆盖整条蛇（头身尾统一样式），会自动根据移动方向旋转。启用后���忽略下方的单独设置。
-                  </div>
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="file"
-                      accept="image/*,video/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file)
-                          handleAssetUpload(
-                            selectedLevel,
-                            "fullSnakeTexture",
-                            file,
-                          );
-                      }}
-                      className="text-xs"
-                    />
-                    {assets.fullSnakeTexture && (
-                      <div className="win95-inset bg-white px-2 py-1 text-xs flex items-center gap-2">
-                        <span>
-                          {assets.fullSnakeTexture.type === "video"
-                            ? "🎥 视频"
-                            : assets.fullSnakeTexture.type === "gif"
-                              ? "🎞️ GIF"
-                              : "🖼️ 图片"}
-                        </span>
-                        <span className="text-green-600">✓ 已启用</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    蛇头（图片/GIF/视频）
-                  </label>
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="file"
-                      accept="image/*,video/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file)
-                          handleAssetUpload(selectedLevel, "snakeHead", file);
-                      }}
-                      className="text-xs"
-                    />
-                    {assets.snakeHead && (
-                      <div className="win95-inset bg-white px-2 py-1 text-xs">
-                        {assets.snakeHead.type === "video"
-                          ? "🎥 视频"
-                          : assets.snakeHead.type === "gif"
-                            ? "🎞️ GIF"
-                            : "🖼️ 图片"}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    🎯 蛇头方向贴图（可选）
-                  </label>
-                  <div className="text-[10px] text-gray-600 mb-2">
-                    为不同移动方向设置专属贴图，未设置则使用默认蛇头
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* 向上 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ⬆️ 向上
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeHeadUp",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeHeadUp && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 向下 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ⬇️ 向下
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeHeadDown",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeHeadDown && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 向左 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ⬅️ 向左
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeHeadLeft",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeHeadLeft && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 向右 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ➡️ 向右
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeHeadRight",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeHeadRight && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    蛇身（图片/GIF/视频）
-                  </label>
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="file"
-                      accept="image/*,video/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file)
-                          handleAssetUpload(selectedLevel, "snakeBody", file);
-                      }}
-                      className="text-xs"
-                    />
-                    {assets.snakeBody && (
-                      <div className="win95-inset bg-white px-2 py-1 text-xs">
-                        {assets.snakeBody.type === "video"
-                          ? "🎥 视频"
-                          : assets.snakeBody.type === "gif"
-                            ? "🎞️ GIF"
-                            : "🖼️ 图片"}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    🎯 蛇身方向贴图（可选）
-                  </label>
-                  <div className="text-[10px] text-gray-600 mb-2">
-                    为不同移动方向设置专属贴图，未设置则使用默认蛇身
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* 向上 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ⬆️ 向上
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeBodyUp",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeBodyUp && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 向下 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ⬇️ 向下
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeBodyDown",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeBodyDown && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设���
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 向左 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ⬅️ 向左
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeBodyLeft",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeBodyLeft && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 向右 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ➡️ 向右
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeBodyRight",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeBodyRight && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    蛇尾（图片/GIF/视频）
-                  </label>
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="file"
-                      accept="image/*,video/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file)
-                          handleAssetUpload(selectedLevel, "snakeTail", file);
-                      }}
-                      className="text-xs"
-                    />
-                    {assets.snakeTail && (
-                      <div className="win95-inset bg-white px-2 py-1 text-xs">
-                        {assets.snakeTail.type === "video"
-                          ? "🎥 视频"
-                          : assets.snakeTail.type === "gif"
-                            ? "🎞️ GIF"
-                            : "🖼️ 图片"}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    🎯 蛇尾方向贴图（可选）
-                  </label>
-                  <div className="text-[10px] text-gray-600 mb-2">
-                    为不同移动方向设置专属贴图，未��置则使用默认蛇尾
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* 向上 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ⬆️ 向上
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeTailUp",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeTailUp && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 向下 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ⬇️ 向下
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeTailDown",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeTailDown && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 向左 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ⬅️ 向左
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeTailLeft",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeTailLeft && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 向右 */}
-                    <div className="win95-inset bg-white p-2">
-                      <label className="text-[10px] font-bold mb-1 block">
-                        ➡️ 向右
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file)
-                            handleAssetUpload(
-                              selectedLevel,
-                              "snakeTailRight",
-                              file,
-                            );
-                        }}
-                        className="text-[10px] w-full"
-                      />
-                      {assets.snakeTailRight && (
-                        <div className="mt-1 text-[10px] text-green-600">
-                          ✓ 已设置
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 游戏参数设置 */}
-              <div className="mt-4 space-y-3">
-                {/* 全局参数 */}
-                <div className="text-xs font-bold mb-2">🎨 全局参数设置</div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    蛇的大小
-                  </label>
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="range"
-                      min="1"
-                      max="5"
-                      step="0.5"
-                      value={snakeScale}
-                      onChange={(e) => {
-                        const newValue = parseFloat(e.target.value);
-                        setSnakeScaleByLevel((prev) => {
-                          const updated = { ...prev, [currentLevel]: newValue };
-                          localStorage.setItem(
-                            "snakeGameSnakeScaleByLevel",
-                            JSON.stringify(updated),
-                          );
-                          return updated;
-                        });
-                      }}
-                      className="flex-1"
-                    />
-                    <span className="text-xs font-bold win95-inset bg-white px-2 py-1 w-16 text-center">
-                      {snakeScale}x
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-gray-600 mt-1">
-                    调整蛇的显示大小（1倍=20px，5倍=100px，最大限制72px）
-                    <br />
-                    ⚙️ 设置仅对当前关卡有效
-                  </div>
-                </div>
-
-                <div className="win95-outset bg-[#c0c0c0] p-3">
-                  <label className="text-xs font-bold mb-2 block">
-                    蛇节间距
-                  </label>
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="range"
-                      min="0"
-                      max="2"
-                      step="0.1"
-                      value={snakeSpacingFactor}
-                      onChange={(e) => {
-                        const newValue = parseFloat(e.target.value);
-                        setSnakeSpacingFactorByLevel((prev) => {
-                          const updated = { ...prev, [currentLevel]: newValue };
-                          localStorage.setItem(
-                            "snakeGameSpacingFactorByLevel",
-                            JSON.stringify(updated),
-                          );
-                          return updated;
-                        });
-                      }}
-                      className="flex-1"
-                    />
-                    <span className="text-xs font-bold win95-inset bg-white px-2 py-1 w-16 text-center">
-                      {snakeSpacingFactor.toFixed(1)}x
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-gray-600 mt-1">
-                    调整蛇各节之间的间距（0=紧密，2=松散）
-                    <br />
-                    ⚙️ 设置仅对当前关卡有效
-                  </div>
-                </div>
-
-                {/* 关卡8参数 */}
-                {selectedLevel === 8 && (
-                  <>
-                    <div className="text-xs font-bold mb-2 mt-4">
-                      🎮 游戏参数设置（关卡8专用）
-                    </div>
-
-                    <div className="win95-outset bg-[#c0c0c0] p-3">
-                      <label className="text-xs font-bold mb-2 block">
-                        玩家蛇初始长度
-                      </label>
-                      <div className="flex gap-2 items-center">
-                        <input
-                          type="number"
-                          min="1"
-                          max="15"
-                          value={playerInitialLength}
-                          onChange={(e) =>
-                            setPlayerInitialLength(
-                              Math.max(1, Math.min(15, Number(e.target.value))),
-                            )
-                          }
-                          className="win95-inset px-2 py-1 bg-white text-xs w-20"
-                        />
-                        <span className="text-xs">格（推荐：8格）</span>
-                      </div>
-                    </div>
-
-                    <div className="win95-outset bg-[#c0c0c0] p-3">
-                      <label className="text-xs font-bold mb-2 block">
-                        敌人蛇生成间隔
-                      </label>
-                      <div className="flex gap-2 items-center">
-                        <input
-                          type="number"
-                          min="500"
-                          max="5000"
-                          step="100"
-                          value={enemySpawnInterval}
-                          onChange={(e) =>
-                            setEnemySpawnInterval(
-                              Math.max(
-                                500,
-                                Math.min(5000, Number(e.target.value)),
-                              ),
-                            )
-                          }
-                          className="win95-inset px-2 py-1 bg-white text-xs w-20"
-                        />
-                        <span className="text-xs">毫秒（1秒 = 1000毫秒）</span>
-                      </div>
-                    </div>
-
-                    <div className="win95-outset bg-[#c0c0c0] p-3">
-                      <label className="text-xs font-bold mb-2 block">
-                        蛇身血量
-                      </label>
-                      <div className="flex gap-2 items-center">
-                        <input
-                          type="number"
-                          min="1"
-                          max="10"
-                          value={segmentMaxHealth}
-                          onChange={(e) =>
-                            setSegmentMaxHealth(
-                              Math.max(1, Math.min(10, Number(e.target.value))),
-                            )
-                          }
-                          className="win95-inset px-2 py-1 bg-white text-xs w-20"
-                        />
-                        <span className="text-xs">
-                          HP（每格被攻击此次数后消失）
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="mt-4 space-y-2">
-                <div className="text-[10px] text-gray-600 win95-inset bg-white p-2 space-y-1">
-                  <div>
-                    💡 <strong>支持格式：</strong>
-                    图片（JPG/PNG）、GIF动画、MP4视频
-                  </div>
-                  <div>
-                    📦 <strong>文件大小：</strong>
-                  </div>
-                  <div className="ml-4">
-                    • 小文件（&lt;100MB）：永久保存，刷新后仍然有效 ✅
-                  </div>
-                  <div className="ml-4">
-                    • 大文件（≥100MB）：临时模式，刷新后需重新上传 ⚠️
-                  </div>
-                  <div>
-                    💾 <strong>智能保存：</strong>
-                    系统自动判断文件大小选择最佳存储方式
-                  </div>
-                  <div>
-                    🎯 <strong>建议：</strong>压缩文件至100MB以下可实现永久保存
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      if (confirm("确定要重置所有游戏参数为默认值吗？")) {
-                        setPlayerInitialLength(8);
-                        setEnemySpawnInterval(1000);
-                        setSegmentMaxHealth(1);
-                        setInitialBallBlinkSpeed(500);
-                        setTotalBallsHit(0);
-                        // 重置当前关卡的蛇大小和间距
-                        setSnakeScaleByLevel((prev) => {
-                          const updated = { ...prev, [currentLevel]: 1 };
-                          localStorage.setItem(
-                            "snakeGameSnakeScaleByLevel",
-                            JSON.stringify(updated),
-                          );
-                          return updated;
-                        });
-                        setSnakeSpacingFactorByLevel((prev) => {
-                          const updated = { ...prev, [currentLevel]: 0 };
-                          localStorage.setItem(
-                            "snakeGameSpacingFactorByLevel",
-                            JSON.stringify(updated),
-                          );
-                          return updated;
-                        });
-                      }
-                    }}
-                    className="px-4 py-2 win95-button bg-[#c0c0c0] text-xs"
-                  >
-                    🔄 重置游戏参数
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (
-                        confirm(
-                          "确定要清除所有自定义素材并恢复默认素材吗？此操作不可撤销！",
-                        )
-                      ) {
-                        localStorage.removeItem("snakeGameCustomAssets");
-                        window.location.reload();
-                      }
-                    }}
-                    className="px-4 py-2 win95-button bg-[#c0c0c0] text-xs"
-                  >
-                    ⚠️ 重置所有素材
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <SettingsPage
+          selectedLevel={selectedLevel}
+          setSelectedLevel={setSelectedLevel}
+          onClose={goToMenu}
+          getLevelAssets={getLevelAssets}
+          setLevelAssets={setLevelAssets}
+          handleAssetUpload={handleAssetUpload}
+          currentLevel={currentLevel}
+          snakeScale={snakeScale}
+          setSnakeScaleByLevel={setSnakeScaleByLevel}
+          snakeSpacingFactor={snakeSpacingFactor}
+          setSnakeSpacingFactorByLevel={setSnakeSpacingFactorByLevel}
+          playerInitialLength={playerInitialLength}
+          setPlayerInitialLength={setPlayerInitialLength}
+          enemySpawnInterval={enemySpawnInterval}
+          setEnemySpawnInterval={setEnemySpawnInterval}
+          segmentMaxHealth={segmentMaxHealth}
+          setSegmentMaxHealth={setSegmentMaxHealth}
+          setInitialBallBlinkSpeed={setInitialBallBlinkSpeed}
+          setTotalBallsHit={setTotalBallsHit}
+        />
       );
     }
 
-    const currentBg = getCurrentBackground();
-    const hasBackground = currentBg !== null;
-    const isVideoBg = currentBg?.type === "video";
+    const levelThumbSrc = getLevelAssets(currentLevel).thumbnail?.src ?? "";
+    const playingCfg = getLevelConfig(currentLevel);
+    const playingAssets = getLevelAssets(currentLevel);
+    const playingInlineVideoBg =
+      gameState === "playing" &&
+      playingCfg?.mode !== "growing" &&
+      playingAssets.background?.type === "video" &&
+      playingAssets.background.src
+        ? playingAssets.background
+        : null;
+    const inlineVideoEl =
+      playingInlineVideoBg?.element instanceof HTMLVideoElement
+        ? playingInlineVideoBg.element
+        : null;
 
     return (
-      <div className="min-h-screen bg-[#008080] flex items-center justify-center p-4 relative overflow-hidden">
-        {/* 背景层 */}
-        {currentBg && (
-          <>
-            {isVideoBg && currentBg.element ? (
-              <video
-                key={currentBg.src}
-                src={currentBg.src}
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="fixed inset-0 w-full h-full object-cover transition-opacity duration-500"
-                style={{ objectFit: "cover", zIndex: 0 }}
-              />
-            ) : currentBg.src ? (
-              <div
-                className="fixed inset-0 w-full h-full transition-opacity duration-500"
-                style={{
-                  backgroundImage: `url(${currentBg.src})`,
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                  backgroundRepeat: "no-repeat",
-                  zIndex: 0,
-                }}
-              />
-            ) : null}
-          </>
-        )}
-
-        {/* UI窗口 */}
-        <div
-          className="bg-[#c0c0c0] win95-outset p-1 max-w-3xl w-full relative"
-          style={{
-            boxShadow: hasBackground ? "0 10px 40px rgba(0,0,0,0.5)" : "",
-            zIndex: 10,
-          }}
-        >
-          <div className="bg-gradient-to-r from-[#000080] to-[#1084d0] px-2 py-1 flex items-center justify-between mb-1">
-            <span className="text-white text-sm font-bold">
-              🐍 {getLevelConfig(currentLevel)?.name}
-            </span>
-            <button
-              onClick={() => setGameState("menu")}
-              className="w-4 h-4 bg-[#c0c0c0] win95-button text-[8px]"
-            >
-              ×
-            </button>
-          </div>
-
-          <div className="bg-[#c0c0c0] p-2">
-            <div className="bg-[#c0c0c0] border-b border-white mb-2 pb-1">
-              <div className="flex gap-4 px-1">
-                <button
-                  onClick={() => setGameState("menu")}
-                  className="text-sm hover:bg-[#000080] hover:text-white px-2 py-0.5"
-                >
-                  返回
-                </button>
-                <button
-                  onClick={() => startLevel(currentLevel)}
-                  className="text-sm hover:bg-[#000080] hover:text-white px-2 py-0.5"
-                >
-                  重新开始
-                </button>
-              </div>
-            </div>
-
-            <div className="flex justify-between items-center mb-2">
-              <div className="flex gap-2">
-                <div className="win95-inset px-3 py-1 bg-white">
-                  <span className="text-sm font-mono">分数: {score}</span>
-                </div>
-                <div className="win95-inset px-3 py-1 bg-white">
-                  <span className="text-sm font-mono">
-                    长度: {snake.length}
-                  </span>
-                </div>
-                {getLevelConfig(currentLevel)?.mode === "blink" && (
-                  <>
-                    <div className="win95-inset px-3 py-1 bg-white">
-                      <span className="text-sm font-mono">
-                        地图上: {balls.length}
-                      </span>
-                    </div>
-                    <div className="win95-inset px-3 py-1 bg-white">
-                      <span className="text-sm font-mono">
-                        已击中: {totalBallsHit}
-                      </span>
-                    </div>
-                  </>
-                )}
-                {getLevelConfig(currentLevel)?.mode === "escape" && (
-                  <>
-                    <div className="win95-inset px-3 py-1 bg-white">
-                      <span className="text-sm font-mono">
-                        生存: {survivalTime}秒
-                      </span>
-                    </div>
-                    <div className="win95-inset px-3 py-1 bg-white">
-                      <span className="text-sm font-mono">
-                        尾巴血量:{" "}
-                        {segmentHealth.length > 0
-                          ? segmentHealth[segmentHealth.length - 1]
-                          : 0}
-                        /{segmentMaxHealth}
-                      </span>
-                    </div>
-                  </>
-                )}
-                {isPaused && (
-                  <div className="win95-inset px-3 py-1 bg-yellow-100">
-                    <span className="text-sm">⏸ 已暂停</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div
-              className="mx-auto win95-inset bg-[#c0c0c0] mb-2"
-              style={{
-                width: GRID_SIZE * CELL_SIZE + 4,
-                height: GRID_SIZE * CELL_SIZE + 4,
-                padding: "2px",
-              }}
-            >
-              <div className="relative">
-                <canvas
-                  ref={canvasRef}
-                  width={GRID_SIZE * CELL_SIZE}
-                  height={GRID_SIZE * CELL_SIZE}
-                />
-
-                {gameOver && (
-                  <div className="absolute inset-0 bg-[#c0c0c0]/95 flex items-center justify-center">
-                    <div className="text-center bg-[#c0c0c0] win95-outset p-6">
-                      <div className="text-4xl mb-2">💀</div>
-                      <div className="font-bold mb-2">游戏结束！</div>
-                      <div className="text-sm mb-4">最终分数: {score}</div>
-                      <button
-                        onClick={() => startLevel(currentLevel)}
-                        className="px-6 py-2 win95-button bg-[#c0c0c0] text-sm"
-                      >
-                        再玩一次
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="win95-outset bg-[#c0c0c0] p-2">
-              <div className="text-xs font-bold mb-2">游戏控制</div>
-              <div className="grid grid-cols-2 gap-1 text-[11px]">
-                <div className="win95-inset bg-white px-2 py-1">
-                  ↑ / {keyMapping.up[1]?.toUpperCase()} - 向上
-                </div>
-                <div className="win95-inset bg-white px-2 py-1">
-                  ↓ / {keyMapping.down[1]?.toUpperCase()} - 向下
-                </div>
-                <div className="win95-inset bg-white px-2 py-1">
-                  ← / {keyMapping.left[1]?.toUpperCase()} - 向左
-                </div>
-                <div className="win95-inset bg-white px-2 py-1">
-                  → / {keyMapping.right[1]?.toUpperCase()} - 向���
-                </div>
-              </div>
-              <div className="win95-inset bg-white px-2 py-1 text-[11px] mt-1">
-                空格键 - 暂停
-              </div>
-            </div>
-
-            <div className="win95-inset bg-[#c0c0c0] mt-2 px-2 py-1 flex justify-between text-[11px]">
-              <span>就绪</span>
-              <span>{getLevelConfig(currentLevel)?.desc}</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <GamePlayScreen
+        levelName={getLevelConfig(currentLevel)?.name ?? ""}
+        levelMode={getLevelConfig(currentLevel)?.mode}
+        levelThumbSrc={levelThumbSrc}
+        inlineVideoElement={inlineVideoEl}
+        score={score}
+        snakeLength={snake.length}
+        ballsOnMap={balls.length}
+        totalBallsHit={totalBallsHit}
+        survivalTimeSec={survivalTime}
+        segmentHealth={segmentHealth}
+        segmentMaxHealth={segmentMaxHealth}
+        isPaused={isPaused}
+        gameOver={gameOver}
+        keyMapping={keyMapping}
+        canvasRef={canvasRef}
+        onCloseToLevelSelect={goToLevelSelect}
+      />
     );
   };
 
   return (
     <>
-      <audio ref={bgmRef} />
-      {renderContent()}
+      <audio ref={bgmRef} preload="auto" />
+      {!menuReady && (
+        <PageLoadingOverlay message="Startseiten-Ressourcen werden geladen..." />
+      )}
+      {menuReady && pageTransitionLoading && (
+        <PageLoadingOverlay message={pageLoadingHint || "Wird geladen..."} />
+      )}
+      {menuReady && renderContent()}
     </>
   );
 }

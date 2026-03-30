@@ -1,0 +1,46 @@
+import type { DefaultAssetConfigEntry } from "./types";
+import {
+  video1,
+  video2,
+  video3,
+  video5,
+  video6,
+  video7,
+  video8,
+  game4_1,
+  game4_2,
+  game4_3,
+  game4_4,
+  thumbBg1,
+  thumbBg2,
+  thumbBg3,
+  thumbBg4,
+  thumbBg5,
+  thumbBg6,
+  thumbBg7,
+  thumbBg8,
+  snack1,
+  snack2,
+  snack3,
+  snack4,
+  snack5,
+  snack6,
+  snack7,
+  snack8,
+} from "./assetImports";
+
+/** 默认素材配置（1–3、5–8 为 video；第 4 关为 img/bg_4 四张图 + assets/img 蛇样式） */
+export const DEFAULT_ASSETS_CONFIG: Record<number, DefaultAssetConfigEntry> = {
+  1: { background: video1, thumbnail: thumbBg1, fullSnakeTexture: snack1 },
+  2: { background: video2, thumbnail: thumbBg2, fullSnakeTexture: snack2 },
+  3: { background: video3, thumbnail: thumbBg3, fullSnakeTexture: snack3 },
+  4: {
+    backgrounds: [game4_1, game4_2, game4_3, game4_4],
+    thumbnail: thumbBg4,
+    fullSnakeTexture: snack4,
+  },
+  5: { background: video5, thumbnail: thumbBg5, fullSnakeTexture: snack5 },
+  6: { background: video6, thumbnail: thumbBg6, fullSnakeTexture: snack6 },
+  7: { background: video7, thumbnail: thumbBg7, fullSnakeTexture: snack7 },
+  8: { background: video8, thumbnail: thumbBg8, fullSnakeTexture: snack8 },
+};
